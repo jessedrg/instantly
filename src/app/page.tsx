@@ -6,7 +6,7 @@ interface ProgressItem {
   current: number;
   total: number;
   name: string;
-  status: "excluded" | "included" | "";
+  status: "instantly" | "leadmagic" | "included" | "";
   email: string;
 }
 
@@ -17,7 +17,7 @@ export default function Home() {
   const [files, setFiles] = useState<File[]>([]);
   const [processing, setProcessing] = useState(false);
   const [logs, setLogs] = useState<ProgressItem[]>([]);
-  const [summary, setSummary] = useState<{ total: number; included: number; excluded: number } | null>(null);
+  const [summary, setSummary] = useState<{ total: number; included: number; fromInstantly: number } | null>(null);
   const [csvData, setCsvData] = useState<string>("");
   const [currentFile, setCurrentFile] = useState("");
   const logsEndRef = useRef<HTMLDivElement>(null);
@@ -67,7 +67,7 @@ export default function Home() {
     setCsvData("");
 
     let allCsv = "";
-    let totalSummary = { total: 0, included: 0, excluded: 0 };
+    let totalSummary = { total: 0, included: 0, fromInstantly: 0 };
 
     for (const file of files) {
       setCurrentFile(file.name);
@@ -99,7 +99,7 @@ export default function Home() {
             allCsv += json.csv;
             totalSummary.total += json.total;
             totalSummary.included += json.included;
-            totalSummary.excluded += json.excluded;
+            totalSummary.fromInstantly += (json.fromInstantly || 0);
           } else {
             setLogs((prev) => [...prev, json]);
           }
@@ -213,13 +213,18 @@ export default function Home() {
             <div key={i} className="py-0.5">
               <span className="text-gray-500">[{log.current}/{log.total}]</span>{" "}
               <span className="text-white">{log.name}</span>{" "}
-              {log.status === "excluded" ? (
-                <span className="text-red-400">excluido</span>
-              ) : (
+              {log.status === "instantly" ? (
                 <>
-                  <span className="text-green-400">incluido</span>
+                  <span className="text-yellow-400">Instantly</span>
                   {log.email && <span className="text-blue-400 ml-2">{log.email}</span>}
                 </>
+              ) : log.status === "leadmagic" ? (
+                <>
+                  <span className="text-green-400">LeadMagic</span>
+                  {log.email && <span className="text-blue-400 ml-2">{log.email}</span>}
+                </>
+              ) : (
+                <span className="text-gray-400">incluido</span>
               )}
             </div>
           ))}
@@ -237,12 +242,12 @@ export default function Home() {
               <div className="text-xs text-gray-400">Total</div>
             </div>
             <div className="text-center">
-              <div className="text-2xl font-bold text-red-400">{summary.excluded}</div>
-              <div className="text-xs text-gray-400">En Instantly</div>
+              <div className="text-2xl font-bold text-yellow-400">{summary.fromInstantly}</div>
+              <div className="text-xs text-gray-400">Email de Instantly</div>
             </div>
             <div className="text-center">
-              <div className="text-2xl font-bold text-green-400">{summary.included}</div>
-              <div className="text-xs text-gray-400">Nuevos</div>
+              <div className="text-2xl font-bold text-green-400">{summary.total - summary.fromInstantly}</div>
+              <div className="text-xs text-gray-400">Email de LeadMagic</div>
             </div>
           </div>
           <button

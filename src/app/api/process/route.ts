@@ -6,7 +6,7 @@ const INSTANTLY_API_KEY = process.env.INSTANTLY_API_KEY!;
 const LEADMAGIC_API_KEY = process.env.LEADMAGIC_API_KEY!;
 const APP_PASSWORD = process.env.APP_PASSWORD!;
 
-async function searchContactInInstantly(firstName: string, lastName: string): Promise<boolean> {
+async function searchContactInInstantly(firstName: string, lastName: string): Promise<{ found: boolean; email: string }> {
   try {
     const response = await fetch("https://api.instantly.ai/api/v2/leads/list", {
       method: "POST",
@@ -17,18 +17,23 @@ async function searchContactInInstantly(firstName: string, lastName: string): Pr
       body: JSON.stringify({ search: firstName, limit: 100 }),
     });
 
-    if (!response.ok) return false;
+    if (!response.ok) return { found: false, email: "" };
 
     const data = await response.json();
     const items = data.items ?? [];
 
-    return items.some(
+    const match = items.find(
       (lead: any) =>
         lead.first_name?.toLowerCase() === firstName.toLowerCase() &&
         lead.last_name?.toLowerCase() === lastName.toLowerCase()
     );
+
+    if (match) {
+      return { found: true, email: match.email || "" };
+    }
+    return { found: false, email: "" };
   } catch {
-    return false;
+    return { found: false, email: "" };
   }
 }
 
@@ -79,6 +84,7 @@ export async function POST(req: NextRequest) {
     async start(controller) {
       const total = rows.length;
       let completed = 0;
+      let fromInstantly = 0;
       const resultSlots: { row: Record<string, string>; included: boolean }[] = new Array(total);
 
       async function processRow(i: number) {
@@ -96,11 +102,14 @@ export async function POST(req: NextRequest) {
           return;
         }
 
-        const exists = await searchContactInInstantly(firstName, lastName);
+        const { found, email: instantlyEmail } = await searchContactInInstantly(firstName, lastName);
 
-        if (exists) {
-          progress.status = "excluded";
-          resultSlots[i] = { row, included: false };
+        if (found) {
+          row["email"] = instantlyEmail;
+          progress.status = "instantly";
+          progress.email = instantlyEmail;
+          fromInstantly++;
+          resultSlots[i] = { row, included: true };
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(progress)}\n\n`));
         } else {
           const linkedinUrl = (row["Linkedin"] || "").trim();
@@ -108,7 +117,7 @@ export async function POST(req: NextRequest) {
           if (linkedinUrl) email = await findPersonalEmail(linkedinUrl);
 
           row["email"] = email;
-          progress.status = "included";
+          progress.status = "leadmagic";
           progress.email = email;
           resultSlots[i] = { row, included: true };
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(progress)}\n\n`));
@@ -133,7 +142,7 @@ export async function POST(req: NextRequest) {
       const outputCsv = stringify(included, { header: true, columns });
 
       controller.enqueue(
-        encoder.encode(`data: ${JSON.stringify({ done: true, csv: outputCsv, total, included: included.length, excluded: total - included.length })}\n\n`)
+        encoder.encode(`data: ${JSON.stringify({ done: true, csv: outputCsv, total, included: included.length, fromInstantly })}\n\n`)
       );
       controller.close();
     },
