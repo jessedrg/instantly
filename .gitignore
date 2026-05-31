@@ -2,6 +2,3 @@ node_modules
 .next
 .env
 .env.local
-input/*.csv
-output/
-*.csv

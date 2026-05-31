@@ -1,47 +1,25 @@
 # Instantly CSV Filter
 
-Filter leads against Instantly CRM and enrich with personal emails via LeadMagic.
+Web app to filter leads against Instantly CRM and enrich with personal emails via LeadMagic.
 
 ## What it does
 
-1. Reads all CSVs from `input/` folder
+1. Upload CSVs via the web UI
 2. Checks each contact against Instantly (by First Name + Last Name)
-3. If found in Instantly → **excluded**
+3. If found → excluded
 4. If NOT found → calls LeadMagic to get personal email via LinkedIn URL
-5. Outputs filtered CSV with `email` column to `output/`
+5. Download filtered CSV with `email` column
 
-## CLI Usage
-
-```bash
-cp .env.example .env
-# Edit .env with your API keys
-npm install
-npm start
-```
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `INSTANTLY_API_KEY` | Instantly API v2 Bearer token | required |
-| `LEADMAGIC_API_KEY` | LeadMagic API key | required |
-| `INPUT_DIR` | Folder with input CSVs | `input` |
-| `OUTPUT_DIR` | Folder for output CSVs | `output` |
-| `CONCURRENCY` | Parallel requests | `10` |
-
-## Web App
-
-A Next.js web interface for non-technical users.
+## Setup
 
 ```bash
-cd web
 cp .env.local.example .env.local
-# Edit .env.local with your keys + password
+# Edit .env.local with your keys
 npm install
 npm run dev
 ```
 
-### Web Environment Variables
+## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
@@ -56,3 +34,7 @@ Input CSVs must have these columns:
 - `First Name`
 - `Last Name`
 - `Linkedin` (URL for email enrichment)
+
+## Deploy
+
+Push to GitHub → auto-deploys on Vercel. Set env vars in Vercel dashboard.
