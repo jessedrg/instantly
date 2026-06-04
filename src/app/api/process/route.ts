@@ -19,7 +19,7 @@ async function loadAllInstantlyLeads(): Promise<Map<string, string>> {
 
   while (pages < MAX_PAGES) {
     try {
-      const body: any = { limit: 1000 };
+      const body: any = { limit: 100 };
       if (cursor) body.starting_after = cursor;
 
       const res = await fetch("https://api.instantly.ai/api/v2/leads/list", {
@@ -44,7 +44,7 @@ async function loadAllInstantlyLeads(): Promise<Map<string, string>> {
         }
       }
 
-      if (!data.next_starting_after || items.length < 1000) break;
+      if (!data.next_starting_after || items.length < 100) break;
       cursor = data.next_starting_after;
       pages++;
     } catch {
