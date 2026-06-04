@@ -237,7 +237,7 @@ export default function Home() {
       {/* Process button */}
       {files.length > 0 && !processing && (
         <button
-          onClick={processFiles}
+          onClick={() => processFiles()}
           className="w-full py-3 bg-green-600 hover:bg-green-700 rounded-lg font-semibold transition-colors mb-6"
         >
           Procesar {files.length} archivo{files.length > 1 ? "s" : ""}
