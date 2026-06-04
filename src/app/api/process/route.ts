@@ -2,39 +2,57 @@ import { NextRequest } from "next/server";
 import { parse } from "csv-parse/sync";
 import { stringify } from "csv-stringify/sync";
 
+export const maxDuration = 300;
+export const dynamic = "force-dynamic";
+
 const INSTANTLY_API_KEY = process.env.INSTANTLY_API_KEY!;
 const LEADMAGIC_API_KEY = process.env.LEADMAGIC_API_KEY!;
 const APP_PASSWORD = process.env.APP_PASSWORD!;
+const CONCURRENCY = parseInt(process.env.CONCURRENCY || "20", 10);
 
-async function searchContactInInstantly(firstName: string, lastName: string): Promise<{ found: boolean; email: string }> {
-  try {
-    const response = await fetch("https://api.instantly.ai/api/v2/leads/list", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${INSTANTLY_API_KEY}`,
-      },
-      body: JSON.stringify({ search: firstName, limit: 100 }),
-    });
+// Pre-load ALL Instantly leads into a lookup map via pagination
+async function loadAllInstantlyLeads(): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  let cursor: string | undefined;
+  let pages = 0;
+  const MAX_PAGES = 200;
 
-    if (!response.ok) return { found: false, email: "" };
+  while (pages < MAX_PAGES) {
+    try {
+      const body: any = { limit: 1000 };
+      if (cursor) body.starting_after = cursor;
 
-    const data = await response.json();
-    const items = data.items ?? [];
+      const res = await fetch("https://api.instantly.ai/api/v2/leads/list", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${INSTANTLY_API_KEY}`,
+        },
+        body: JSON.stringify(body),
+      });
 
-    const match = items.find(
-      (lead: any) =>
-        lead.first_name?.toLowerCase() === firstName.toLowerCase() &&
-        lead.last_name?.toLowerCase() === lastName.toLowerCase()
-    );
+      if (!res.ok) break;
 
-    if (match) {
-      return { found: true, email: match.email || "" };
+      const data = await res.json();
+      const items = data.items ?? [];
+
+      for (const lead of items) {
+        const fn = (lead.first_name || "").trim().toLowerCase();
+        const ln = (lead.last_name || "").trim().toLowerCase();
+        if (fn || ln) {
+          map.set(`${fn}|${ln}`, lead.email || "");
+        }
+      }
+
+      if (!data.next_starting_after || items.length < 1000) break;
+      cursor = data.next_starting_after;
+      pages++;
+    } catch {
+      break;
     }
-    return { found: false, email: "" };
-  } catch {
-    return { found: false, email: "" };
   }
+
+  return map;
 }
 
 async function findPersonalEmail(profileUrl: string): Promise<string> {
@@ -57,12 +75,11 @@ async function findPersonalEmail(profileUrl: string): Promise<string> {
   }
 }
 
-const CONCURRENCY = parseInt(process.env.CONCURRENCY || "10", 10);
-
 export async function POST(req: NextRequest) {
   const formData = await req.formData();
   const password = formData.get("password") as string;
   const file = formData.get("file") as File;
+  const skipNames = formData.get("skipNames") as string || "";
 
   if (password !== APP_PASSWORD) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
@@ -79,10 +96,32 @@ export async function POST(req: NextRequest) {
     trim: true,
   });
 
+  // Parse skip set (already processed names from previous run)
+  const skipSet = new Set<string>(skipNames ? skipNames.split("|||") : []);
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
+      function send(obj: any) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+      }
+
       const total = rows.length;
+
+      if (total === 0) {
+        send({ done: true, csv: "", total: 0, included: 0, fromInstantly: 0 });
+        controller.close();
+        return;
+      }
+
+      // Phase 1: Pre-load all Instantly leads
+      send({ phase: "loading", message: "Cargando leads de Instantly..." });
+
+      const instantlyMap = await loadAllInstantlyLeads();
+
+      send({ phase: "loading", message: `${instantlyMap.size} leads cargados. Procesando ${total} filas...` });
+
+      // Phase 2: Process all leads
       let completed = 0;
       let fromInstantly = 0;
       const resultSlots: { row: Record<string, string>; included: boolean }[] = new Array(total);
@@ -91,28 +130,43 @@ export async function POST(req: NextRequest) {
         const row = rows[i];
         const firstName = (row["First Name"] || "").trim();
         const lastName = (row["Last Name"] || "").trim();
+        const fullKey = `${firstName}|${lastName}`;
 
-        const progress: any = { current: ++completed, total, name: `${firstName} ${lastName}`.trim(), status: "", email: "" };
+        // Skip already-processed leads (from "Continue" button)
+        if (skipSet.has(fullKey)) {
+          resultSlots[i] = { row, included: false };
+          return;
+        }
+
+        const progress: any = {
+          current: ++completed,
+          total: total - skipSet.size,
+          name: `${firstName} ${lastName}`.trim(),
+          status: "",
+          email: "",
+        };
 
         if (!firstName && !lastName) {
           row["email"] = "";
           progress.status = "included";
           progress.row = row;
           resultSlots[i] = { row, included: true };
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(progress)}\n\n`));
+          send(progress);
           return;
         }
 
-        const { found, email: instantlyEmail } = await searchContactInInstantly(firstName, lastName);
+        // Instant local lookup
+        const key = `${firstName.toLowerCase()}|${lastName.toLowerCase()}`;
+        const instantlyEmail = instantlyMap.get(key);
 
-        if (found) {
+        if (instantlyEmail !== undefined) {
           row["email"] = instantlyEmail;
           progress.status = "instantly";
           progress.email = instantlyEmail;
           progress.row = row;
           fromInstantly++;
           resultSlots[i] = { row, included: true };
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(progress)}\n\n`));
+          send(progress);
         } else {
           const linkedinUrl = (row["Linkedin"] || "").trim();
           let email = "";
@@ -123,11 +177,10 @@ export async function POST(req: NextRequest) {
           progress.email = email;
           progress.row = row;
           resultSlots[i] = { row, included: true };
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(progress)}\n\n`));
+          send(progress);
         }
       }
 
-      // Run with concurrency pool
       let idx = 0;
       async function worker() {
         while (idx < total) {
@@ -139,14 +192,12 @@ export async function POST(req: NextRequest) {
       const workers = Array.from({ length: Math.min(CONCURRENCY, total) }, () => worker());
       await Promise.all(workers);
 
-      const included = resultSlots.filter((r) => r.included).map((r) => r.row);
+      const included = resultSlots.filter((r) => r && r.included).map((r) => r.row);
       const columns = Object.keys(rows[0] || {});
       if (!columns.includes("email")) columns.push("email");
       const outputCsv = stringify(included, { header: true, columns });
 
-      controller.enqueue(
-        encoder.encode(`data: ${JSON.stringify({ done: true, csv: outputCsv, total, included: included.length, fromInstantly })}\n\n`)
-      );
+      send({ done: true, csv: outputCsv, total, included: included.length, fromInstantly });
       controller.close();
     },
   });

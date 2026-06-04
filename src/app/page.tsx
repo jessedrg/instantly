@@ -33,6 +33,10 @@ export default function Home() {
   const [currentFile, setCurrentFile] = useState("");
   const logsEndRef = useRef<HTMLDivElement>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [loadingPhase, setLoadingPhase] = useState("");
+  const [streamCut, setStreamCut] = useState(false);
+  const [processedNames, setProcessedNames] = useState<Set<string>>(new Set());
+  const [expectedTotal, setExpectedTotal] = useState(0);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,23 +75,33 @@ export default function Home() {
     setFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const processFiles = async () => {
+  const processFiles = async (skipNamesParam?: Set<string>) => {
     setProcessing(true);
-    setLogs([]);
-    setSummary(null);
-    setCsvData("");
+    setStreamCut(false);
+    setLoadingPhase("");
+    if (!skipNamesParam) {
+      setLogs([]);
+      setSummary(null);
+      setCsvData("");
+      setProcessedNames(new Set());
+      setExpectedTotal(0);
+    }
 
     let allCsv = "";
-    let totalProcessed = 0;
+    let totalProcessed = skipNamesParam ? processedNames.size : 0;
     let totalFromInstantly = 0;
     let gotDone = false;
     const collectedRows: Record<string, string>[] = [];
+    const namesThisRun = new Set<string>(skipNamesParam || []);
 
     for (const file of files) {
       setCurrentFile(file.name);
       const formData = new FormData();
       formData.append("password", password);
       formData.append("file", file);
+      if (namesThisRun.size > 0) {
+        formData.append("skipNames", Array.from(namesThisRun).join("|||"));
+      }
 
       const res = await fetch("/api/process", { method: "POST", body: formData });
 
@@ -113,10 +127,14 @@ export default function Home() {
             if (json.done) {
               allCsv += json.csv;
               gotDone = true;
+            } else if (json.phase) {
+              setLoadingPhase(json.message || "");
             } else {
               totalProcessed++;
+              if (json.total) setExpectedTotal(json.total);
               if (json.status === "instantly") totalFromInstantly++;
               if (json.row) collectedRows.push(json.row);
+              if (json.name) namesThisRun.add(json.name);
               setLogs((prev) => [...prev, json]);
             }
           }
@@ -126,11 +144,23 @@ export default function Home() {
       }
     }
 
+    setProcessedNames(namesThisRun);
+    setLoadingPhase("");
+
     const finalCsv = allCsv || rowsToCsv(collectedRows);
-    setCsvData(finalCsv);
+    setCsvData((prev) => prev ? prev + "\n" + finalCsv.split("\n").slice(1).join("\n") : finalCsv);
     setSummary({ total: totalProcessed, included: totalProcessed, fromInstantly: totalFromInstantly });
     setProcessing(false);
     setCurrentFile("");
+
+    // Detect if stream was cut before completion
+    if (!gotDone && totalProcessed > 0) {
+      setStreamCut(true);
+    }
+  };
+
+  const handleContinue = () => {
+    processFiles(processedNames);
   };
 
   const downloadCsv = () => {
@@ -220,9 +250,24 @@ export default function Home() {
           <div className="flex items-center gap-3 mb-3">
             <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
             <span className="text-sm text-gray-400">
-              Procesando: {currentFile} ({logs.length} leads procesados)
+              {loadingPhase || `Procesando: ${currentFile} (${logs.length} leads procesados)`}
             </span>
           </div>
+        </div>
+      )}
+
+      {/* Continue button when stream is cut */}
+      {streamCut && !processing && (
+        <div className="mb-6 bg-orange-500/10 border border-orange-500/30 rounded-xl p-4">
+          <p className="text-orange-400 text-sm mb-3">
+            Stream cortado por timeout ({processedNames.size}/{expectedTotal || "?"} procesados). Puedes continuar donde se quedó.
+          </p>
+          <button
+            onClick={handleContinue}
+            className="w-full py-3 bg-orange-600 hover:bg-orange-700 rounded-lg font-semibold transition-colors"
+          >
+            Continuar procesando restantes
+          </button>
         </div>
       )}
 
