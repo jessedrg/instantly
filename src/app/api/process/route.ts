@@ -96,6 +96,29 @@ export async function POST(req: NextRequest) {
     trim: true,
   });
 
+  // Normalize column names to expected format
+  const columnMap: Record<string, string> = {
+    "LinkedIn": "Linkedin",
+    "linkedin": "Linkedin",
+    "Email": "email",
+    "EMAIL": "email",
+    "First name": "First Name",
+    "first name": "First Name",
+    "Last name": "Last Name",
+    "last name": "Last Name",
+    "Job Title": "Job Title",
+    "Title": "Job Title",
+    "title": "Job Title",
+  };
+
+  for (const row of rows) {
+    for (const [from, to] of Object.entries(columnMap)) {
+      if (from !== to && row[from] !== undefined && row[to] === undefined) {
+        row[to] = row[from];
+      }
+    }
+  }
+
   // Parse skip set (already processed names from previous run)
   const skipSet = new Set<string>(skipNames ? skipNames.split("|||") : []);
 
