@@ -8,6 +8,17 @@ interface ProgressItem {
   name: string;
   status: "instantly" | "leadmagic" | "included" | "";
   email: string;
+  row?: Record<string, string>;
+}
+
+function rowsToCsv(rows: Record<string, string>[]): string {
+  if (rows.length === 0) return "";
+  const cols = Object.keys(rows[0]);
+  const header = cols.map((c) => `"${c.replace(/"/g, '""')}"`).join(",");
+  const lines = rows.map((r) =>
+    cols.map((c) => `"${(r[c] || "").replace(/"/g, '""')}"`).join(",")
+  );
+  return [header, ...lines].join("\n");
 }
 
 export default function Home() {
@@ -67,7 +78,10 @@ export default function Home() {
     setCsvData("");
 
     let allCsv = "";
-    let totalSummary = { total: 0, included: 0, fromInstantly: 0 };
+    let totalProcessed = 0;
+    let totalFromInstantly = 0;
+    let gotDone = false;
+    const collectedRows: Record<string, string>[] = [];
 
     for (const file of files) {
       setCurrentFile(file.name);
@@ -83,32 +97,38 @@ export default function Home() {
       const decoder = new TextDecoder();
       let buffer = "";
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n\n");
-        buffer = lines.pop() || "";
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop() || "";
 
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const json = JSON.parse(line.slice(6));
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const json = JSON.parse(line.slice(6));
 
-          if (json.done) {
-            allCsv += json.csv;
-            totalSummary.total += json.total;
-            totalSummary.included += json.included;
-            totalSummary.fromInstantly += (json.fromInstantly || 0);
-          } else {
-            setLogs((prev) => [...prev, json]);
+            if (json.done) {
+              allCsv += json.csv;
+              gotDone = true;
+            } else {
+              totalProcessed++;
+              if (json.status === "instantly") totalFromInstantly++;
+              if (json.row) collectedRows.push(json.row);
+              setLogs((prev) => [...prev, json]);
+            }
           }
         }
+      } catch (err) {
+        console.error("Stream error:", err);
       }
     }
 
-    setCsvData(allCsv);
-    setSummary(totalSummary);
+    const finalCsv = allCsv || rowsToCsv(collectedRows);
+    setCsvData(finalCsv);
+    setSummary({ total: totalProcessed, included: totalProcessed, fromInstantly: totalFromInstantly });
     setProcessing(false);
     setCurrentFile("");
   };

@@ -97,6 +97,7 @@ export async function POST(req: NextRequest) {
         if (!firstName && !lastName) {
           row["email"] = "";
           progress.status = "included";
+          progress.row = row;
           resultSlots[i] = { row, included: true };
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(progress)}\n\n`));
           return;
@@ -108,6 +109,7 @@ export async function POST(req: NextRequest) {
           row["email"] = instantlyEmail;
           progress.status = "instantly";
           progress.email = instantlyEmail;
+          progress.row = row;
           fromInstantly++;
           resultSlots[i] = { row, included: true };
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(progress)}\n\n`));
@@ -119,6 +121,7 @@ export async function POST(req: NextRequest) {
           row["email"] = email;
           progress.status = "leadmagic";
           progress.email = email;
+          progress.row = row;
           resultSlots[i] = { row, included: true };
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(progress)}\n\n`));
         }
