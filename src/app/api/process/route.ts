@@ -121,83 +121,76 @@ export async function POST(req: NextRequest) {
 
       send({ phase: "loading", message: `${instantlyMap.size} leads cargados. Procesando ${total} filas...` });
 
-      // Phase 2: Process all leads
-      let completed = 0;
+      // Phase 2: Instant matching (synchronous, all at once)
       let fromInstantly = 0;
-      const resultSlots: { row: Record<string, string>; included: boolean }[] = new Array(total);
+      let counter = 0;
+      const effectiveTotal = total - skipSet.size;
+      const needLeadMagic: { row: Record<string, string>; idx: number }[] = [];
+      const allResults: Record<string, string>[] = [];
 
-      async function processRow(i: number) {
+      for (let i = 0; i < total; i++) {
         const row = rows[i];
         const firstName = (row["First Name"] || "").trim();
         const lastName = (row["Last Name"] || "").trim();
         const fullKey = `${firstName}|${lastName}`;
 
-        // Skip already-processed leads (from "Continue" button)
-        if (skipSet.has(fullKey)) {
-          resultSlots[i] = { row, included: false };
-          return;
-        }
+        if (skipSet.has(fullKey)) continue;
 
-        const progress: any = {
-          current: ++completed,
-          total: total - skipSet.size,
-          name: `${firstName} ${lastName}`.trim(),
-          status: "",
-          email: "",
-        };
-
-        if (!firstName && !lastName) {
-          row["email"] = "";
-          progress.status = "included";
-          progress.row = row;
-          resultSlots[i] = { row, included: true };
-          send(progress);
-          return;
-        }
-
-        // Instant local lookup
         const key = `${firstName.toLowerCase()}|${lastName.toLowerCase()}`;
-        const instantlyEmail = instantlyMap.get(key);
+        const instantlyEmail = (firstName && lastName) ? instantlyMap.get(key) : undefined;
 
         if (instantlyEmail !== undefined) {
           row["email"] = instantlyEmail;
-          progress.status = "instantly";
-          progress.email = instantlyEmail;
-          progress.row = row;
           fromInstantly++;
-          resultSlots[i] = { row, included: true };
-          send(progress);
+          allResults.push(row);
+          send({
+            current: ++counter,
+            total: effectiveTotal,
+            name: `${firstName} ${lastName}`.trim(),
+            status: "instantly",
+            email: instantlyEmail,
+            row,
+          });
         } else {
+          needLeadMagic.push({ row, idx: i });
+        }
+      }
+
+      send({ phase: "loading", message: `${fromInstantly} en Instantly. Enriqueciendo ${needLeadMagic.length} con LeadMagic...` });
+
+      // Phase 3: LeadMagic enrichment (only for leads NOT in Instantly)
+      let lmIdx = 0;
+      async function enrichWorker() {
+        while (lmIdx < needLeadMagic.length) {
+          const j = lmIdx++;
+          const { row } = needLeadMagic[j];
+          const firstName = (row["First Name"] || "").trim();
+          const lastName = (row["Last Name"] || "").trim();
           const linkedinUrl = (row["Linkedin"] || "").trim();
           let email = "";
           if (linkedinUrl) email = await findPersonalEmail(linkedinUrl);
 
           row["email"] = email;
-          progress.status = "leadmagic";
-          progress.email = email;
-          progress.row = row;
-          resultSlots[i] = { row, included: true };
-          send(progress);
+          allResults.push(row);
+          send({
+            current: ++counter,
+            total: effectiveTotal,
+            name: `${firstName} ${lastName}`.trim(),
+            status: "leadmagic",
+            email,
+            row,
+          });
         }
       }
 
-      let idx = 0;
-      async function worker() {
-        while (idx < total) {
-          const i = idx++;
-          await processRow(i);
-        }
-      }
-
-      const workers = Array.from({ length: Math.min(CONCURRENCY, total) }, () => worker());
+      const workers = Array.from({ length: Math.min(CONCURRENCY, needLeadMagic.length || 1) }, () => enrichWorker());
       await Promise.all(workers);
 
-      const included = resultSlots.filter((r) => r && r.included).map((r) => r.row);
       const columns = Object.keys(rows[0] || {});
       if (!columns.includes("email")) columns.push("email");
-      const outputCsv = stringify(included, { header: true, columns });
+      const outputCsv = stringify(allResults, { header: true, columns });
 
-      send({ done: true, csv: outputCsv, total, included: included.length, fromInstantly });
+      send({ done: true, csv: outputCsv, total: effectiveTotal, included: allResults.length, fromInstantly });
       controller.close();
     },
   });
