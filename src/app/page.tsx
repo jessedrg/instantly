@@ -163,6 +163,73 @@ export default function Home() {
     processFiles(processedNames);
   };
 
+  const extractInstantly = async () => {
+    setProcessing(true);
+    setStreamCut(false);
+    setLoadingPhase("");
+    setLogs([]);
+    setSummary(null);
+    setCsvData("");
+    setExpectedTotal(0);
+
+    let allCsv = "";
+    let totalFound = 0;
+    let gotDone = false;
+    const collectedRows: Record<string, string>[] = [];
+
+    for (const file of files) {
+      setCurrentFile(file.name);
+      const formData = new FormData();
+      formData.append("password", password);
+      formData.append("file", file);
+
+      const res = await fetch("/api/instantly-check", { method: "POST", body: formData });
+
+      if (!res.ok || !res.body) continue;
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const json = JSON.parse(line.slice(6));
+
+            if (json.done) {
+              allCsv += json.csv;
+              gotDone = true;
+            } else if (json.phase) {
+              setLoadingPhase(json.message || "");
+            } else {
+              totalFound++;
+              if (json.total) setExpectedTotal(json.total);
+              if (json.row) collectedRows.push(json.row);
+              setLogs((prev) => [...prev, json]);
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Stream error:", err);
+      }
+    }
+
+    setLoadingPhase("");
+    const finalCsv = allCsv || rowsToCsv(collectedRows);
+    setCsvData(finalCsv);
+    setSummary({ total: totalFound, included: totalFound, fromInstantly: totalFound });
+    setProcessing(false);
+    setCurrentFile("");
+  };
+
   const downloadCsv = () => {
     const blob = new Blob([csvData], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
@@ -234,14 +301,22 @@ export default function Home() {
         </div>
       )}
 
-      {/* Process button */}
+      {/* Process buttons */}
       {files.length > 0 && !processing && (
-        <button
-          onClick={() => processFiles()}
-          className="w-full py-3 bg-green-600 hover:bg-green-700 rounded-lg font-semibold transition-colors mb-6"
-        >
-          Procesar {files.length} archivo{files.length > 1 ? "s" : ""}
-        </button>
+        <div className="flex gap-3 mb-6">
+          <button
+            onClick={() => processFiles()}
+            className="flex-1 py-3 bg-green-600 hover:bg-green-700 rounded-lg font-semibold transition-colors"
+          >
+            Procesar {files.length} archivo{files.length > 1 ? "s" : ""}
+          </button>
+          <button
+            onClick={extractInstantly}
+            className="flex-1 py-3 bg-yellow-600 hover:bg-yellow-700 rounded-lg font-semibold transition-colors"
+          >
+            Extraer leads en Instantly
+          </button>
+        </div>
       )}
 
       {/* Progress */}
