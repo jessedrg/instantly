@@ -6,7 +6,7 @@ interface ProgressItem {
   current: number;
   total: number;
   name: string;
-  status: "instantly" | "leadmagic" | "included" | "";
+  status: "instantly" | "leadmagic" | "included" | "new" | "";
   email: string;
   row?: Record<string, string>;
 }
@@ -172,13 +172,13 @@ export default function Home() {
     setCsvData("");
     setExpectedTotal(0);
 
-    let allCsv = "";
-    let totalFound = 0;
-    let gotDone = false;
+    let totalNew = 0;
+    let totalSkipped = 0;
     const collectedRows: Record<string, string>[] = [];
 
-    for (const file of files) {
-      setCurrentFile(file.name);
+    for (let fi = 0; fi < files.length; fi++) {
+      const file = files[fi];
+      setCurrentFile(`${file.name} (${fi + 1}/${files.length})`);
       const formData = new FormData();
       formData.append("password", password);
       formData.append("file", file);
@@ -205,14 +205,16 @@ export default function Home() {
             const json = JSON.parse(line.slice(6));
 
             if (json.done) {
-              allCsv += json.csv;
-              gotDone = true;
+              // ignore server csv, we build our own from collectedRows
             } else if (json.phase) {
               setLoadingPhase(json.message || "");
             } else {
-              totalFound++;
-              if (json.total) setExpectedTotal(json.total);
-              if (json.row) collectedRows.push(json.row);
+              if (json.status === "new" && json.row) {
+                totalNew++;
+                collectedRows.push(json.row);
+              } else if (json.status === "instantly") {
+                totalSkipped++;
+              }
               setLogs((prev) => [...prev, json]);
             }
           }
@@ -223,9 +225,9 @@ export default function Home() {
     }
 
     setLoadingPhase("");
-    const finalCsv = allCsv || rowsToCsv(collectedRows);
+    const finalCsv = rowsToCsv(collectedRows);
     setCsvData(finalCsv);
-    setSummary({ total: totalFound, included: totalFound, fromInstantly: totalFound });
+    setSummary({ total: totalNew + totalSkipped, included: totalNew, fromInstantly: totalSkipped });
     setProcessing(false);
     setCurrentFile("");
   };
@@ -314,7 +316,7 @@ export default function Home() {
             onClick={extractInstantly}
             className="flex-1 py-3 bg-yellow-600 hover:bg-yellow-700 rounded-lg font-semibold transition-colors"
           >
-            Extraer leads en Instantly
+            Filtrar leads de Instantly
           </button>
         </div>
       )}
@@ -363,6 +365,8 @@ export default function Home() {
                   <span className="text-green-400">LeadMagic</span>
                   {log.email && <span className="text-blue-400 ml-2">{log.email}</span>}
                 </>
+              ) : log.status === "new" ? (
+                <span className="text-green-400">✓ Nuevo</span>
               ) : (
                 <span className="text-gray-400">incluido</span>
               )}
@@ -382,12 +386,12 @@ export default function Home() {
               <div className="text-xs text-gray-400">Total</div>
             </div>
             <div className="text-center">
-              <div className="text-2xl font-bold text-yellow-400">{summary.fromInstantly}</div>
-              <div className="text-xs text-gray-400">Email de Instantly</div>
+              <div className="text-2xl font-bold text-red-400">{summary.fromInstantly}</div>
+              <div className="text-xs text-gray-400">Ya en Instantly</div>
             </div>
             <div className="text-center">
-              <div className="text-2xl font-bold text-green-400">{summary.total - summary.fromInstantly}</div>
-              <div className="text-xs text-gray-400">Email de LeadMagic</div>
+              <div className="text-2xl font-bold text-green-400">{summary.included}</div>
+              <div className="text-xs text-gray-400">Nuevos (en CSV)</div>
             </div>
           </div>
           <button

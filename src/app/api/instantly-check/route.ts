@@ -115,29 +115,37 @@ export async function POST(req: NextRequest) {
 
       send({ phase: "loading", message: `${instantlyMap.size} leads cargados. Comparando ${total} filas...` });
 
-      // Instant matching — only keep leads found in Instantly
-      const foundRows: Record<string, string>[] = [];
+      // Instant matching — keep leads NOT found in Instantly
+      const newRows: Record<string, string>[] = [];
       let counter = 0;
+      let skipped = 0;
 
       for (let i = 0; i < total; i++) {
         const row = rows[i];
         const firstName = (row["First Name"] || "").trim();
         const lastName = (row["Last Name"] || "").trim();
 
-        if (!firstName && !lastName) continue;
-
         const key = `${firstName.toLowerCase()}|${lastName.toLowerCase()}`;
-        const instantlyEmail = instantlyMap.get(key);
+        const inInstantly = (firstName || lastName) && instantlyMap.has(key);
 
-        if (instantlyEmail !== undefined) {
-          row["email"] = instantlyEmail;
-          foundRows.push(row);
+        if (inInstantly) {
+          skipped++;
           send({
             current: ++counter,
             total,
             name: `${firstName} ${lastName}`.trim(),
             status: "instantly",
-            email: instantlyEmail,
+            email: instantlyMap.get(key) || "",
+            row,
+          });
+        } else {
+          newRows.push(row);
+          send({
+            current: ++counter,
+            total,
+            name: `${firstName} ${lastName}`.trim(),
+            status: "new",
+            email: "",
             row,
           });
         }
@@ -145,9 +153,9 @@ export async function POST(req: NextRequest) {
 
       const columns = Object.keys(rows[0] || {});
       if (!columns.includes("email")) columns.push("email");
-      const outputCsv = stringify(foundRows, { header: true, columns });
+      const outputCsv = stringify(newRows, { header: true, columns });
 
-      send({ done: true, csv: outputCsv, total, found: foundRows.length });
+      send({ done: true, csv: outputCsv, total, found: newRows.length, skipped });
       controller.close();
     },
   });
