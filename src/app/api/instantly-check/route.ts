@@ -84,6 +84,9 @@ export async function POST(req: NextRequest) {
     "first name": "First Name",
     "Last name": "Last Name",
     "last name": "Last Name",
+    "Job Title": "Job Title",
+    "Title": "Job Title",
+    "title": "Job Title",
   };
 
   for (const row of rows) {
