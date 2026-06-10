@@ -93,6 +93,7 @@ export default function Home() {
     let gotDone = false;
     const collectedRows: Record<string, string>[] = [];
     const namesThisRun = new Set<string>(skipNamesParam || []);
+    const prevCount = skipNamesParam ? processedNames.size : 0;
 
     for (const file of files) {
       setCurrentFile(file.name);
@@ -131,10 +132,16 @@ export default function Home() {
               setLoadingPhase(json.message || "");
             } else {
               totalProcessed++;
-              if (json.total) setExpectedTotal(json.total);
+              if (json.total) setExpectedTotal(json.total + prevCount);
               if (json.status === "instantly") totalFromInstantly++;
               if (json.row) collectedRows.push(json.row);
-              if (json.name) namesThisRun.add(json.name);
+              // Store key in same format backend uses for skipSet
+              const firstName = (json.row?.["First Name"] || "").trim();
+              const lastName = (json.row?.["Last Name"] || "").trim();
+              if (firstName || lastName) namesThisRun.add(`${firstName}|${lastName}`);
+              // Offset the counter display for continuation
+              json.current = json.current + prevCount;
+              json.total = (json.total || 0) + prevCount;
               setLogs((prev) => [...prev, json]);
             }
           }
