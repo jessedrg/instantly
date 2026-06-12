@@ -8,47 +8,72 @@ export const dynamic = "force-dynamic";
 const INSTANTLY_API_KEY = process.env.INSTANTLY_API_KEY!;
 const APP_PASSWORD = process.env.APP_PASSWORD!;
 
+async function fetchInstantlyPage(cursor: string | undefined, pageSize: number): Promise<{ items: any[]; next?: string } | null> {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), 10000);
+  try {
+    const body: any = { limit: pageSize };
+    if (cursor) body.starting_after = cursor;
+
+    const res = await fetch("https://api.instantly.ai/api/v2/leads/list", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${INSTANTLY_API_KEY}`,
+      },
+      body: JSON.stringify(body),
+      signal: ac.signal,
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    return { items: data.items ?? [], next: data.next_starting_after };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 async function loadAllInstantlyLeads(send: (obj: any) => void): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   let cursor: string | undefined;
   let pages = 0;
-  const MAX_PAGES = 200;
+  const MAX_PAGES = 500;
+
+  let pageSize = 1000;
+  const first = await fetchInstantlyPage(undefined, 1000);
+  if (!first || first.items.length === 0) {
+    pageSize = 100;
+  } else {
+    for (const lead of first.items) {
+      const fn = (lead.first_name || "").trim().toLowerCase();
+      const ln = (lead.last_name || "").trim().toLowerCase();
+      if (fn || ln) map.set(`${fn}|${ln}`, lead.email || "");
+    }
+    send({ phase: "loading", message: `${map.size} leads cargados de Instantly...` });
+    if (!first.next || first.items.length < pageSize) return map;
+    cursor = first.next;
+    pages++;
+  }
 
   while (pages < MAX_PAGES) {
-    try {
-      const body: any = { limit: 100 };
-      if (cursor) body.starting_after = cursor;
+    const page = await fetchInstantlyPage(cursor, pageSize);
+    if (!page || page.items.length === 0) break;
 
-      const res = await fetch("https://api.instantly.ai/api/v2/leads/list", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${INSTANTLY_API_KEY}`,
-        },
-        body: JSON.stringify(body),
-      });
-
-      if (!res.ok) break;
-
-      const data = await res.json();
-      const items = data.items ?? [];
-
-      for (const lead of items) {
-        const fn = (lead.first_name || "").trim().toLowerCase();
-        const ln = (lead.last_name || "").trim().toLowerCase();
-        if (fn || ln) {
-          map.set(`${fn}|${ln}`, lead.email || "");
-        }
-      }
-
-      send({ phase: "loading", message: `${map.size} leads cargados de Instantly...` });
-
-      if (!data.next_starting_after || items.length < 100) break;
-      cursor = data.next_starting_after;
-      pages++;
-    } catch {
-      break;
+    for (const lead of page.items) {
+      const fn = (lead.first_name || "").trim().toLowerCase();
+      const ln = (lead.last_name || "").trim().toLowerCase();
+      if (fn || ln) map.set(`${fn}|${ln}`, lead.email || "");
     }
+
+    if (pages % 5 === 0) {
+      send({ phase: "loading", message: `${map.size} leads cargados de Instantly...` });
+    }
+
+    if (!page.next || page.items.length < pageSize) break;
+    cursor = page.next;
+    pages++;
   }
 
   return map;

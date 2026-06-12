@@ -8,54 +8,79 @@ export const dynamic = "force-dynamic";
 const INSTANTLY_API_KEY = process.env.INSTANTLY_API_KEY!;
 const LEADMAGIC_API_KEY = process.env.LEADMAGIC_API_KEY!;
 const APP_PASSWORD = process.env.APP_PASSWORD!;
-const CONCURRENCY = parseInt(process.env.CONCURRENCY || "20", 10);
+const CONCURRENCY = parseInt(process.env.CONCURRENCY || "50", 10);
 
 // Pre-load ALL Instantly leads into a lookup map via pagination
+async function fetchInstantlyPage(cursor: string | undefined, pageSize: number): Promise<{ items: any[]; next?: string } | null> {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), 10000);
+  try {
+    const body: any = { limit: pageSize };
+    if (cursor) body.starting_after = cursor;
+
+    const res = await fetch("https://api.instantly.ai/api/v2/leads/list", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${INSTANTLY_API_KEY}`,
+      },
+      body: JSON.stringify(body),
+      signal: ac.signal,
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    return { items: data.items ?? [], next: data.next_starting_after };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 async function loadAllInstantlyLeads(): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   let cursor: string | undefined;
   let pages = 0;
-  const MAX_PAGES = 200;
+  const MAX_PAGES = 500;
+
+  // Try limit 1000 first; if first page returns 0, fallback to 100
+  let pageSize = 1000;
+  const first = await fetchInstantlyPage(undefined, 1000);
+  if (!first || first.items.length === 0) {
+    pageSize = 100;
+  } else {
+    for (const lead of first.items) {
+      const fn = (lead.first_name || "").trim().toLowerCase();
+      const ln = (lead.last_name || "").trim().toLowerCase();
+      if (fn || ln) map.set(`${fn}|${ln}`, lead.email || "");
+    }
+    if (!first.next || first.items.length < pageSize) return map;
+    cursor = first.next;
+    pages++;
+  }
 
   while (pages < MAX_PAGES) {
-    try {
-      const body: any = { limit: 100 };
-      if (cursor) body.starting_after = cursor;
+    const page = await fetchInstantlyPage(cursor, pageSize);
+    if (!page || page.items.length === 0) break;
 
-      const res = await fetch("https://api.instantly.ai/api/v2/leads/list", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${INSTANTLY_API_KEY}`,
-        },
-        body: JSON.stringify(body),
-      });
-
-      if (!res.ok) break;
-
-      const data = await res.json();
-      const items = data.items ?? [];
-
-      for (const lead of items) {
-        const fn = (lead.first_name || "").trim().toLowerCase();
-        const ln = (lead.last_name || "").trim().toLowerCase();
-        if (fn || ln) {
-          map.set(`${fn}|${ln}`, lead.email || "");
-        }
-      }
-
-      if (!data.next_starting_after || items.length < 100) break;
-      cursor = data.next_starting_after;
-      pages++;
-    } catch {
-      break;
+    for (const lead of page.items) {
+      const fn = (lead.first_name || "").trim().toLowerCase();
+      const ln = (lead.last_name || "").trim().toLowerCase();
+      if (fn || ln) map.set(`${fn}|${ln}`, lead.email || "");
     }
+
+    if (!page.next || page.items.length < pageSize) break;
+    cursor = page.next;
+    pages++;
   }
 
   return map;
 }
 
 async function findPersonalEmail(profileUrl: string): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
   try {
     const response = await fetch("https://api.leadmagic.io/v1/people/personal-email-finder", {
       method: "POST",
@@ -64,6 +89,8 @@ async function findPersonalEmail(profileUrl: string): Promise<string> {
         "X-API-Key": LEADMAGIC_API_KEY,
       },
       body: JSON.stringify({ profile_url: profileUrl }),
+      signal: controller.signal,
+      keepalive: true,
     });
 
     if (!response.ok) return "";
@@ -72,6 +99,8 @@ async function findPersonalEmail(profileUrl: string): Promise<string> {
     return data.first_personal_email || "";
   } catch {
     return "";
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
